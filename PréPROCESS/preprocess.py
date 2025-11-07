@@ -78,7 +78,8 @@ def process_patient(patient_dir, output_dir):
     mask = nib.load(mask_path)
     img_data = img.get_fdata()
     mask_data = mask.get_fdata()
-
+    
+    mask_data[mask_data == 4] = 3
     # 🔹 Print des dimensions originales
     check_mask_extent(mask_data, name)
     # Crop centré
