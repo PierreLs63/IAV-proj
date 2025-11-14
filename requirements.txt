@@ -1,0 +1,22 @@
+monai==1.3.0
+torch==2.2.0
+torchvision==0.17.0
+
+numpy==1.26.4
+matplotlib==3.8.2
+pillow==10.2.0
+
+nibabel==5.2.0
+scipy==1.11.4
+
+tqdm==4.66.1
+pandas==2.1.4
+
+# lecture .npy, transform utils
+scikit-image==0.22.0
+
+# data loading & utils
+opencv-python==4.9.0.80
+
+# Optional (utile si tu veux entraîner plus tard en 3D/2D UNet)
+einops==0.7.0
