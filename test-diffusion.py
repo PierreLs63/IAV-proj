@@ -7,19 +7,17 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
-from torchvision.models import inception_v3
-from scipy import linalg
-import torch.nn.functional as torch_F
 
 # MONAI imports
 from monai.data import CacheDataset, DataLoader as MonaiDataLoader
 from monai.transforms import (
-    Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRanged,
-    RandRotated, RandFlipd, RandZoomd, ToTensord, Lambda
+    Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRanged, Lambda
 )
 from monai.networks.nets import DiffusionModelUNet
 from monai.networks.schedulers import DDPMScheduler, DDIMScheduler
 from monai.utils import set_determinism
+from monai.metrics import FIDMetric
+from monai.inferers import DiffusionInferer
 
 
 # ========== Dataset MONAI ==========
@@ -57,19 +55,13 @@ def prepare_monai_data_dicts(root_dir):
     return data_dicts
 
 
-def get_monai_transforms(augmentation=True):
+def get_monai_transforms():
     """
     Créer les transformations MONAI pour les images médicales
-    
-    Args:
-        augmentation: Si True, ajoute des augmentations de données
     
     Returns:
         Transformation MONAI composée
     """
-    # Lambda pour charger les fichiers .npy
-    load_npy = Lambda(func=lambda x: np.load(x).astype(np.float32))
-    
     transforms_list = [
         # Charger les données .npy
         Lambda(func=lambda data: {
@@ -89,56 +81,11 @@ def get_monai_transforms(augmentation=True):
         ),
     ]
     
-    # Ajouter des augmentations si demandé
-    if augmentation:
-        transforms_list.extend([
-            RandRotated(
-                keys=['image', 'mask'],
-                range_x=0.2,  # ±0.2 radians (~11 degrés)
-                prob=0.5,
-                mode=['bilinear', 'nearest'],
-                padding_mode='zeros'
-            ),
-            RandFlipd(
-                keys=['image', 'mask'],
-                spatial_axis=0,  # Flip horizontal
-                prob=0.5
-            ),
-            RandFlipd(
-                keys=['image', 'mask'],
-                spatial_axis=1,  # Flip vertical
-                prob=0.5
-            ),
-            RandZoomd(
-                keys=['image', 'mask'],
-                min_zoom=0.9,
-                max_zoom=1.1,
-                prob=0.5,
-                mode=['area', 'nearest']
-            ),
-        ])
-    
     return Compose(transforms_list)
 
-
-# ========== Diffusion Utils ==========
-def linear_beta_schedule(timesteps, start=0.0001, end=0.02):
-    """Schedule linéaire pour les betas"""
-    return torch.linspace(start, end, timesteps)
-
-
-def cosine_beta_schedule(timesteps, s=0.008):
-    """Schedule cosinus pour les betas (plus stable)"""
-    steps = timesteps + 1
-    x = torch.linspace(0, timesteps, steps)
-    alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
-    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-    return torch.clip(betas, 0.0001, 0.9999)
-
-
+# ========== Diffusion Process avec MONAI ==========
 class DiffusionProcess:
-    """Processus de diffusion forward et reverse avec MONAI scheduler"""
+    """Processus de diffusion utilisant MONAI scheduler et inferer"""
     
     def __init__(self, timesteps=1000, beta_schedule='scaled_linear_beta', device='cuda'):
         self.timesteps = timesteps
@@ -147,97 +94,44 @@ class DiffusionProcess:
         # Utiliser le scheduler MONAI DDPM
         self.scheduler = DDPMScheduler(
             num_train_timesteps=timesteps,
-            schedule=beta_schedule,  # 'scaled_linear_beta' ou 'linear'
+            schedule=beta_schedule,
             beta_start=0.0001,
             beta_end=0.02
         )
         
-        # Pour compatibilité avec l'ancien code
-        self.betas = torch.tensor(self.scheduler.betas).to(device)
-        self.alphas = torch.tensor(self.scheduler.alphas).to(device)
-        self.alphas_cumprod = torch.tensor(self.scheduler.alphas_cumprod).to(device)
-        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.0)
-        
-        # Calculs pour la diffusion forward
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
-        
-        # Calculs pour la diffusion reverse
-        self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
-        self.posterior_variance = self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+        # Utiliser l'inferer MONAI pour la génération
+        self.inferer = DiffusionInferer(self.scheduler)
     
-    def q_sample(self, x_start, t, noise=None):
-        """
-        Forward diffusion: ajouter du bruit à l'image
-        x_t = sqrt(alpha_cumprod_t) * x_0 + sqrt(1 - alpha_cumprod_t) * noise
-        """
+    def add_noise(self, x_start, t, noise=None):
+        """Ajouter du bruit avec le scheduler MONAI"""
         if noise is None:
             noise = torch.randn_like(x_start)
-        
-        sqrt_alphas_cumprod_t = self._extract(self.sqrt_alphas_cumprod, t, x_start.shape)
-        sqrt_one_minus_alphas_cumprod_t = self._extract(
-            self.sqrt_one_minus_alphas_cumprod, t, x_start.shape
-        )
-        
-        return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
+        return self.scheduler.add_noise(original_samples=x_start, noise=noise, timesteps=t)
     
-    def p_sample(self, model, x_t, t, mask, clip_denoised=True):
-        """
-        Reverse diffusion: un pas de débruitage
-        Concatène le masque en entrée du modèle
-        """
-        batch_size = x_t.shape[0]
-        
-        # Concaténer x_t avec le masque pour conditionner la génération
-        model_input = torch.cat([x_t, mask], dim=1)
-        
-        # Prédire le bruit
-        predicted_noise = model(model_input, t)
-        
-        # Extraire les coefficients
-        betas_t = self._extract(self.betas, t, x_t.shape)
-        sqrt_one_minus_alphas_cumprod_t = self._extract(
-            self.sqrt_one_minus_alphas_cumprod, t, x_t.shape
-        )
-        sqrt_recip_alphas_t = self._extract(self.sqrt_recip_alphas, t, x_t.shape)
-        
-        # Calculer x_{t-1}
-        model_mean = sqrt_recip_alphas_t * (
-            x_t - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t
-        )
-        
-        if t[0] == 0:
-            return model_mean
-        else:
-            posterior_variance_t = self._extract(self.posterior_variance, t, x_t.shape)
-            noise = torch.randn_like(x_t)
-            return model_mean + torch.sqrt(posterior_variance_t) * noise
-    
-    def p_sample_loop(self, model, shape, mask, progress=True):
-        """
-        Générer une image complète en partant du bruit
-        """
+    def sample(self, model, shape, mask, progress=True):
+        """Générer des images avec l'inferer MONAI"""
         device = next(model.parameters()).device
-        batch_size = shape[0]
         
-        # Partir du bruit pur
-        img = torch.randn(shape, device=device)
+        # Fonction wrapper pour passer le masque au modèle
+        def model_with_mask(x, t):
+            model_input = torch.cat([x, mask], dim=1)
+            return model(model_input, timesteps=t)
         
-        iterator = reversed(range(0, self.timesteps))
+        # Générer avec l'inferer MONAI
+        noise = torch.randn(shape, device=device)
+        
         if progress:
-            iterator = tqdm(iterator, desc='Sampling', total=self.timesteps)
+            iterator = tqdm(self.scheduler.timesteps, desc='Sampling')
+        else:
+            iterator = self.scheduler.timesteps
         
-        for i in iterator:
-            t = torch.full((batch_size,), i, device=device, dtype=torch.long)
-            img = self.p_sample(model, img, t, mask)
+        sample = noise
+        for t in iterator:
+            timesteps = torch.full((shape[0],), t, device=device, dtype=torch.long)
+            model_output = model_with_mask(sample, timesteps)
+            sample, _ = self.scheduler.step(model_output, t, sample)
         
-        return img
-    
-    def _extract(self, a, t, x_shape):
-        """Extraire les valeurs de a correspondant aux indices t"""
-        batch_size = t.shape[0]
-        out = a.gather(-1, t)
-        return out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
+        return sample
 
 
 # ========== Model U-Net MONAI ==========
@@ -272,131 +166,24 @@ def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2)
     return model
 
 
-# ========== FID Calculation ==========
-class InceptionV3FeatureExtractor(nn.Module):
-    """Extracteur de features Inception V3 pour le calcul du FID"""
-    
-    def __init__(self, device='cuda'):
-        super().__init__()
-        # Charger Inception V3 pré-entraîné
-        inception = inception_v3(pretrained=True, transform_input=False)
-        inception.eval()
-        
-        # Utiliser la couche avant la classification (pool3)
-        self.feature_extractor = nn.Sequential(
-            inception.Conv2d_1a_3x3,
-            inception.Conv2d_2a_3x3,
-            inception.Conv2d_2b_3x3,
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            inception.Conv2d_3b_1x1,
-            inception.Conv2d_4a_3x3,
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            inception.Mixed_5b,
-            inception.Mixed_5c,
-            inception.Mixed_5d,
-            inception.Mixed_6a,
-            inception.Mixed_6b,
-            inception.Mixed_6c,
-            inception.Mixed_6d,
-            inception.Mixed_6e,
-            inception.Mixed_7a,
-            inception.Mixed_7b,
-            inception.Mixed_7c,
-            nn.AdaptiveAvgPool2d(output_size=(1, 1))
-        ).to(device)
-        
-        for param in self.feature_extractor.parameters():
-            param.requires_grad = False
-    
-    def forward(self, x):
-        # x: [batch, 1, H, W] grayscale
-        # Convertir en RGB et redimensionner à 299x299
-        x = x.repeat(1, 3, 1, 1)  # Grayscale -> RGB
-        x = torch_F.interpolate(x, size=(299, 299), mode='bilinear', align_corners=False)
-        
-        # Normaliser comme attendu par Inception
-        x = (x + 1) / 2  # De [-1, 1] à [0, 1]
-        x = (x - 0.5) / 0.5  # Normalisation Inception
-        
-        features = self.feature_extractor(x)
-        return features.squeeze(-1).squeeze(-1)
-
-
-def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
-    """Calculer la distance de Fréchet entre deux gaussiennes multivariées"""
-    mu1 = np.atleast_1d(mu1)
-    mu2 = np.atleast_1d(mu2)
-    sigma1 = np.atleast_2d(sigma1)
-    sigma2 = np.atleast_2d(sigma2)
-    
-    diff = mu1 - mu2
-    
-    # Calculer sqrt(sigma1 @ sigma2)
-    covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
-    
-    # Gérer les valeurs numériques instables
-    if not np.isfinite(covmean).all():
-        offset = np.eye(sigma1.shape[0]) * eps
-        covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
-    
-    # Partie imaginaire due aux erreurs numériques
-    if np.iscomplexobj(covmean):
-        if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
-            m = np.max(np.abs(covmean.imag))
-            raise ValueError(f'Imaginary component {m}')
-        covmean = covmean.real
-    
-    tr_covmean = np.trace(covmean)
-    
-    return diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
-
-
-def compute_statistics(images, feature_extractor, batch_size=32):
-    """Calculer moyenne et covariance des features"""
-    feature_extractor.eval()
-    
-    all_features = []
-    
-    with torch.no_grad():
-        for i in range(0, len(images), batch_size):
-            batch = images[i:i+batch_size]
-            features = feature_extractor(batch)
-            all_features.append(features.cpu().numpy())
-    
-    all_features = np.concatenate(all_features, axis=0)
-    mu = np.mean(all_features, axis=0)
-    sigma = np.cov(all_features, rowvar=False)
-    
-    return mu, sigma
-
-
-def calculate_fid(real_images, generated_images, feature_extractor, batch_size=32, device='cuda'):
+# ========== FID Calculation avec MONAI ==========
+def prepare_images_for_fid(images):
     """
-    Calculer le FID entre images réelles et générées
-    
-    Args:
-        real_images: Tensor [N, C, H, W] images réelles
-        generated_images: Tensor [N, C, H, W] images générées
-        feature_extractor: Modèle pour extraire les features
-        batch_size: Taille des batchs pour le calcul
-        device: Device pour les calculs
-    
-    Returns:
-        fid_score: Score FID (plus bas = meilleur)
+    Préparer les images pour le calcul du FID
+    Convertir grayscale en RGB et redimensionner à 299x299
     """
-    real_images = real_images.to(device)
-    generated_images = generated_images.to(device)
+    # Convertir de [-1, 1] à [0, 1]
+    images = (images + 1) / 2
     
-    # Calculer les statistiques pour les images réelles
-    mu_real, sigma_real = compute_statistics(real_images, feature_extractor, batch_size)
+    # Convertir grayscale en RGB si nécessaire
+    if images.shape[1] == 1:
+        images = images.repeat(1, 3, 1, 1)
     
-    # Calculer les statistiques pour les images générées
-    mu_gen, sigma_gen = compute_statistics(generated_images, feature_extractor, batch_size)
+    # Redimensionner à 299x299 (taille attendue par Inception)
+    if images.shape[2] != 299 or images.shape[3] != 299:
+        images = F.interpolate(images, size=(299, 299), mode='bilinear', align_corners=False)
     
-    # Calculer le FID
-    fid_score = calculate_frechet_distance(mu_real, sigma_real, mu_gen, sigma_gen)
-    
-    return fid_score
+    return images
 
 
 # ========== Training ==========
@@ -421,9 +208,9 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
     fid_scores = []
     fid_epochs = []
     
-    # Initialiser l'extracteur de features pour le FID
-    print("Chargement du modèle Inception V3 pour le FID...")
-    feature_extractor = InceptionV3FeatureExtractor(device=device)
+    # Initialiser le FIDMetric de MONAI
+    print("Initialisation du FIDMetric de MONAI...")
+    fid_metric = FIDMetric()
     
     # Préparer un ensemble fixe d'images réelles pour le FID
     print(f"Préparation de {num_fid_samples} images réelles pour l'évaluation FID...")
@@ -438,7 +225,10 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
     
     real_images_for_fid = torch.cat(real_images_list, dim=0)[:num_fid_samples].to(device)
     real_masks_for_fid = torch.cat(real_masks_list, dim=0)[:num_fid_samples].to(device)
-    print(f"Images réelles préparées: {real_images_for_fid.shape}")
+    
+    # Préparer les images réelles pour le FID (format Inception)
+    real_images_fid_format = prepare_images_for_fid(real_images_for_fid)
+    print(f"Images réelles préparées: {real_images_for_fid.shape} -> {real_images_fid_format.shape}")
     
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -457,8 +247,8 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
             # Générer du bruit
             noise = torch.randn_like(images)
             
-            # Forward diffusion: ajouter du bruit aux images
-            x_noisy = diffusion_process.q_sample(images, t, noise)
+            # Forward diffusion: ajouter du bruit aux images avec MONAI
+            x_noisy = diffusion_process.add_noise(images, t, noise)
             
             # Concaténer avec le masque pour conditionner
             model_input = torch.cat([x_noisy, masks], dim=1)
@@ -499,22 +289,21 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
                     masks_batch = real_masks_for_fid[start_idx:end_idx]
                     shape = (current_batch_size, 1, masks_batch.shape[2], masks_batch.shape[3])
                     
-                    # Générer sans barre de progression pour chaque batch
-                    generated_batch = diffusion_process.p_sample_loop(
+                    # Générer avec MONAI inferer
+                    generated_batch = diffusion_process.sample(
                         model, shape, masks_batch, progress=False
                     )
                     generated_images_list.append(generated_batch)
                 
                 generated_images = torch.cat(generated_images_list, dim=0)
             
-            # Calculer le FID
-            fid_score = calculate_fid(
-                real_images_for_fid,
-                generated_images,
-                feature_extractor,
-                batch_size=32,
-                device=device
-            )
+            # Préparer les images générées pour le FID
+            generated_images_fid_format = prepare_images_for_fid(generated_images)
+            
+            # Calculer le FID avec MONAI
+            fid_metric(y_pred=generated_images_fid_format, y=real_images_fid_format)
+            fid_score = fid_metric.aggregate().item()
+            fid_metric.reset()
             
             fid_scores.append(fid_score)
             fid_epochs.append(epoch + 1)
@@ -546,8 +335,8 @@ def generate_samples(model, diffusion_process, masks, num_samples=4, device='cud
         # Shape: [batch, channels, H, W]
         shape = (num_samples, 1, masks.shape[2], masks.shape[3])
         
-        # Générer les images
-        generated = diffusion_process.p_sample_loop(model, shape, masks, progress=True)
+        # Générer les images avec MONAI
+        generated = diffusion_process.sample(model, shape, masks, progress=True)
     
     return generated
 
@@ -597,8 +386,8 @@ def main():
     print('Préparation des données avec MONAI...')
     data_dicts = prepare_monai_data_dicts('cropped_centered')
     
-    # Splits train/val (optionnel, ici on utilise tout pour l'entraînement)
-    train_transforms = get_monai_transforms(augmentation=True)
+    # Transformations (sans augmentation)
+    train_transforms = get_monai_transforms()
     
     # CacheDataset pour accélérer le chargement
     dataset = CacheDataset(
