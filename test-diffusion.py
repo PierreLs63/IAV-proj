@@ -16,7 +16,7 @@ from monai.transforms import (
 from monai.networks.nets import DiffusionModelUNet
 from monai.networks.schedulers import DDPMScheduler, DDIMScheduler
 from monai.utils import set_determinism
-from monai.metrics import FIDMetric
+from monai.metrics import compute_frechet_distance
 from monai.inferers import DiffusionInferer
 
 
@@ -186,6 +186,45 @@ def prepare_images_for_fid(images):
     return images
 
 
+def extract_inception_features(images, device='cuda'):
+    """
+    Extraire les features Inception V3 pour le calcul du FID
+    
+    Args:
+        images: Tensor d'images au format [B, 3, 299, 299] dans [0, 1]
+    
+    Returns:
+        Features extraites
+    """
+    from torchvision.models import inception_v3
+    
+    # Charger Inception V3
+    inception = inception_v3(pretrained=True, transform_input=False)
+    inception.fc = torch.nn.Identity()  # Retirer la couche finale
+    inception = inception.to(device)
+    inception.eval()
+    
+    with torch.no_grad():
+        features = inception(images)
+    
+    return features
+
+
+def compute_fid_statistics(features):
+    """
+    Calculer la moyenne et la covariance des features
+    
+    Args:
+        features: Tensor de features [N, D]
+    
+    Returns:
+        mu, sigma
+    """
+    mu = torch.mean(features, dim=0)
+    sigma = torch.cov(features.T)
+    return mu, sigma
+
+
 # ========== Training ==========
 def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num_epochs=100, 
                    fid_eval_freq=10, num_fid_samples=500):
@@ -208,10 +247,6 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
     fid_scores = []
     fid_epochs = []
     
-    # Initialiser le FIDMetric de MONAI
-    print("Initialisation du FIDMetric de MONAI...")
-    fid_metric = FIDMetric()
-    
     # Préparer un ensemble fixe d'images réelles pour le FID
     print(f"Préparation de {num_fid_samples} images réelles pour l'évaluation FID...")
     real_images_list = []
@@ -229,6 +264,11 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
     # Préparer les images réelles pour le FID (format Inception)
     real_images_fid_format = prepare_images_for_fid(real_images_for_fid)
     print(f"Images réelles préparées: {real_images_for_fid.shape} -> {real_images_fid_format.shape}")
+    
+    # Extraire les features des images réelles une seule fois
+    print("Extraction des features Inception pour les images réelles...")
+    real_features = extract_inception_features(real_images_fid_format, device)
+    real_mu, real_sigma = compute_fid_statistics(real_features)
     
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -300,10 +340,12 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
             # Préparer les images générées pour le FID
             generated_images_fid_format = prepare_images_for_fid(generated_images)
             
-            # Calculer le FID avec MONAI
-            fid_metric(y_pred=generated_images_fid_format, y=real_images_fid_format)
-            fid_score = fid_metric.aggregate().item()
-            fid_metric.reset()
+            # Extraire les features des images générées
+            generated_features = extract_inception_features(generated_images_fid_format, device)
+            gen_mu, gen_sigma = compute_fid_statistics(generated_features)
+            
+            # Calculer le FID avec compute_frechet_distance de MONAI
+            fid_score = compute_frechet_distance(gen_mu, gen_sigma, real_mu, real_sigma).item()
             
             fid_scores.append(fid_score)
             fid_epochs.append(epoch + 1)
