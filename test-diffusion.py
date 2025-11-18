@@ -21,6 +21,29 @@ from monai.inferers import DiffusionInferer
 
 
 # ========== Dataset MONAI ==========
+def load_and_normalize(data):
+    """Charger et normaliser les fichiers .npy"""
+    image = np.load(data['image']).astype(np.float32)
+    mask = np.load(data['mask']).astype(np.float32)
+    
+    # Ajouter dimension channel [H, W] -> [1, H, W]
+    if image.ndim == 2:
+        image = image[np.newaxis, ...]
+    if mask.ndim == 2:
+        mask = mask[np.newaxis, ...]
+    
+    # Normaliser entre -1 et 1
+    image_min, image_max = image.min(), image.max()
+    if image_max > image_min:
+        image = 2.0 * (image - image_min) / (image_max - image_min) - 1.0
+    
+    mask_min, mask_max = mask.min(), mask.max()
+    if mask_max > mask_min:
+        mask = 2.0 * (mask - mask_min) / (mask_max - mask_min) - 1.0
+    
+    return {'image': image, 'mask': mask}
+
+
 def prepare_monai_data_dicts(root_dir):
     """
     Préparer les dictionnaires de données pour MONAI
@@ -63,22 +86,7 @@ def get_monai_transforms():
         Transformation MONAI composée
     """
     transforms_list = [
-        # Charger les données .npy
-        Lambda(func=lambda data: {
-            'image': np.load(data['image']).astype(np.float32),
-            'mask': np.load(data['mask']).astype(np.float32)
-        }),
-        # Assurer que les channels sont en premier [C, H, W]
-        EnsureChannelFirstd(keys=['image', 'mask'], channel_dim='no_channel'),
-        # Normaliser entre -1 et 1
-        ScaleIntensityRanged(
-            keys=['image', 'mask'],
-            a_min=None,  # Calculer automatiquement
-            a_max=None,
-            b_min=-1.0,
-            b_max=1.0,
-            clip=True
-        ),
+        Lambda(func=load_and_normalize)
     ]
     
     return Compose(transforms_list)
@@ -155,12 +163,12 @@ def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2)
         spatial_dims=spatial_dims,
         in_channels=in_channels,
         out_channels=out_channels,
-        num_channels=(64, 128, 256, 512),  # Base channels à chaque niveau
-        attention_levels=(False, False, True, True),  # Attention aux niveaux profonds
-        num_res_blocks=2,  # Blocs résiduels par niveau
-        num_head_channels=32,  # Pour l'attention
-        with_conditioning=False,  # Pas de conditioning supplémentaire (on utilise le masque)
-        resblock_updown=True,  # Utiliser des blocs résiduels pour up/down sampling
+        channels=(64, 128, 256, 512), 
+        attention_levels=(False, False, True, True),
+        num_res_blocks=2,
+        num_head_channels=32,
+        with_conditioning=False,
+        resblock_updown=True,
     )
     
     return model
