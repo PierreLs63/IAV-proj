@@ -396,6 +396,7 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
                 'fid_scores': fid_scores,
                 'fid_epochs': fid_epochs,
         }, f'diffusion_checkpoint_epoch_{epoch+1}.pth')
+    return losses, fid_scores, fid_epochs        
 
 
 # ========== Sampling/Génération ==========
