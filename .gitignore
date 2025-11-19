@@ -3,3 +3,10 @@ cropped_centered
 containers
 /plots
 data
+genheart.out
+genheart.err
+former.pth
+diffusion_results.png
+training_metrics.png
+test_slurm.py
+diffusion_model_final.pth

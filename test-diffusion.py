@@ -7,7 +7,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
-
+from time import time
+from datetime import datetime
 # MONAI imports
 from monai.data import CacheDataset, DataLoader as MonaiDataLoader
 from monai.transforms import (
@@ -15,7 +16,7 @@ from monai.transforms import (
 )
 from monai.networks.nets import DiffusionModelUNet
 from monai.networks.schedulers import DDPMScheduler, DDIMScheduler
-from monai.utils import set_determinism
+from monai.utils import set_determinism, first
 from monai.metrics import compute_frechet_distance
 from monai.inferers import DiffusionInferer
 
@@ -95,16 +96,17 @@ def get_monai_transforms():
 class DiffusionProcess:
     """Processus de diffusion utilisant MONAI scheduler et inferer"""
     
-    def __init__(self, timesteps=1000, beta_schedule='scaled_linear_beta', device='cuda'):
+    def __init__(self, timesteps=1000, beta_schedule='linear_beta', device='cuda'):
         self.timesteps = timesteps
         self.device = device
+        
         
         # Utiliser le scheduler MONAI DDPM
         self.scheduler = DDPMScheduler(
             num_train_timesteps=timesteps,
             schedule=beta_schedule,
-            beta_start=0.0001,
-            beta_end=0.02
+            beta_start=0.0015,
+           beta_end=0.0195
         )
         
         # Utiliser l'inferer MONAI pour la génération
@@ -163,12 +165,10 @@ def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2)
         spatial_dims=spatial_dims,
         in_channels=in_channels,
         out_channels=out_channels,
-        channels=(64, 128, 256, 512), 
-        attention_levels=(False, False, True, True),
+        channels=(128, 256, 512),
+        attention_levels=(False, True, True),
         num_res_blocks=2,
-        num_head_channels=32,
-        with_conditioning=False,
-        resblock_updown=True,
+        num_head_channels=(0, 256, 512),
     )
     
     return model
@@ -235,7 +235,7 @@ def compute_fid_statistics(features):
 
 # ========== Training ==========
 def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num_epochs=100, 
-                   fid_eval_freq=10, num_fid_samples=500):
+                   fid_eval_freq=10, num_fid_samples=100):
     """
     Entraîner le modèle de diffusion avec évaluation FID
     
@@ -361,17 +361,7 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
             
             model.train()
         
-        # Sauvegarder périodiquement
-        if (epoch + 1) % 10 == 0:
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-                'fid_scores': fid_scores,
-                'fid_epochs': fid_epochs,
-            }, f'diffusion_checkpoint_epoch_{epoch+1}.pth')
-    
+
     return losses, fid_scores, fid_epochs
 
 
@@ -419,6 +409,7 @@ def visualize_results(images, masks, generated, num_samples=4):
 
 # ========== Main ==========
 def main():
+    start = time()
     # Configuration
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using device: {device}')
@@ -455,7 +446,7 @@ def main():
         num_workers=4,
         pin_memory=True
     )
-    
+
     # Modèle MONAI
     print('Création du modèle MONAI DiffusionModelUNet...')
     model = create_monai_diffusion_unet(
@@ -463,6 +454,10 @@ def main():
         mask_channels=1,
         spatial_dims=2
     ).to(device)
+
+    if os.path.exists('diffusion_model_final.pth') :
+        checkpoint = torch.load('diffusion_model_final.pth') 
+        model.load_state_dict(checkpoint['model_state_dict'])
     
     print(f'Nombre de paramètres: {sum(p.numel() for p in model.parameters())/1e6:.2f}M')
     
@@ -485,7 +480,7 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=10,  # Calculer le FID tous les 10 epochs
+        fid_eval_freq=100,  # Calculer le FID tous les 10 epochs
         num_fid_samples=500  # Utiliser 500 échantillons pour le FID
     )
     
@@ -544,7 +539,6 @@ def main():
     
     plt.tight_layout()
     plt.savefig('training_metrics.png', dpi=150)
-    plt.show()
     
     # Afficher les résultats FID
     if len(fid_scores) > 0:
@@ -552,8 +546,18 @@ def main():
         for epoch, score in zip(fid_epochs, fid_scores):
             print(f'Epoch {epoch}: FID = {score:.4f}')
         print(f'\nMeilleur FID: {best_fid:.4f} à l\'epoch {best_epoch}')
+        if os.path.exists("best_FID.pth") :
+            if torch.load("best_FID.pth") > best_fid:
+                torch.save("best_FID.pth",best_fid)
+        else :
+            torch.save("best_FID.pth",best_fid)
+
+        
     
     print('\n=== Entraînement terminé ===')
+    duration = time() - start
+    with open("time_use.log",'a') as f:
+        f.write(datetime.now(),duration,"\n")
 
 
 if __name__ == '__main__':
