@@ -10,3 +10,4 @@ diffusion_results.png
 training_metrics.png
 test_slurm.py
 diffusion_model_final.pth
+remaining_time.py

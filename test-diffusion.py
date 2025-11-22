@@ -1,3 +1,6 @@
+from time import time
+from datetime import datetime
+start = time()
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,8 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
-from time import time
-from datetime import datetime
+
 # MONAI imports
 from monai.data import CacheDataset, DataLoader as MonaiDataLoader
 from monai.transforms import (
@@ -166,7 +168,7 @@ def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2)
         in_channels=in_channels,
         out_channels=out_channels,
         channels=(128, 256, 512),
-        attention_levels=(False, True, True),
+        attention_levels=(False, False, True),
         num_res_blocks=2,
         num_head_channels=(0, 256, 512),
     )
@@ -416,7 +418,7 @@ def main():
     
     # Hyperparamètres
     batch_size = 16
-    num_epochs = 100
+    num_epochs = 1
     learning_rate = 2e-4
     timesteps = 1000
     
@@ -455,9 +457,11 @@ def main():
         spatial_dims=2
     ).to(device)
 
-    if os.path.exists('diffusion_model_final.pth') :
+    try :
         checkpoint = torch.load('diffusion_model_final.pth') 
         model.load_state_dict(checkpoint['model_state_dict'])
+    except :
+        pass
     
     print(f'Nombre de paramètres: {sum(p.numel() for p in model.parameters())/1e6:.2f}M')
     
@@ -480,8 +484,8 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=100,  # Calculer le FID tous les 10 epochs
-        num_fid_samples=500  # Utiliser 500 échantillons pour le FID
+        fid_eval_freq=50,  # Calculer le FID tous les 10 epochs
+        num_fid_samples=100  # Utiliser 100 échantillons pour le FID
     )
     
     # Sauvegarder le modèle final
@@ -555,10 +559,11 @@ def main():
         
     
     print('\n=== Entraînement terminé ===')
-    duration = time() - start
-    with open("time_use.log",'a') as f:
-        f.write(datetime.now(),duration,"\n")
 
 
 if __name__ == '__main__':
     main()
+    duration = time() - start
+    with open("time_use.log",'a') as f:
+        f.write(f"{datetime.now()}|{duration}\n")
+        print("durée enregistrée")

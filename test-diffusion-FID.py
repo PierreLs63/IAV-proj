@@ -449,7 +449,7 @@ def main():
     
     # Hyperparamètres
     batch_size = 16
-    num_epochs = 100
+    num_epochs = 1
     learning_rate = 2e-4
     timesteps = 1000
     
@@ -509,8 +509,8 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=10,  # Calculer le FID tous les 10 epochs
-        num_fid_samples=500  # Utiliser 500 échantillons pour le FID
+        fid_eval_freq=1,  # Calculer le FID tous les 10 epochs
+        num_fid_samples=100  # Utiliser 500 échantillons pour le FID
     )
     
     # Sauvegarder le modèle final
