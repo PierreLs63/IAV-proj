@@ -168,7 +168,7 @@ def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2)
         in_channels=in_channels,
         out_channels=out_channels,
         channels=(128, 256, 512),
-        attention_levels=(False, False, True),
+        attention_levels=(False, True, True),
         num_res_blocks=2,
         num_head_channels=(0, 256, 512),
     )
@@ -321,7 +321,7 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
         print(f'Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.6f}')
         
         # Calculer le FID périodiquement
-        if (epoch + 1) % fid_eval_freq == 0:
+        if (epoch + 1) % fid_eval_freq == 0 or epoch + 1 == 10 :
             print(f"\nCalcul du FID à l'epoch {epoch+1}...")
             model.eval()
             
@@ -405,8 +405,7 @@ def visualize_results(images, masks, generated, num_samples=4):
         axes[2, i].axis('off')
     
     plt.tight_layout()
-    plt.savefig('diffusion_results.png', dpi=150)
-    plt.show()
+    plt.savefig('plots/diffusion_results.png', dpi=150)
 
 
 # ========== Main ==========
@@ -418,7 +417,7 @@ def main():
     
     # Hyperparamètres
     batch_size = 16
-    num_epochs = 1
+    num_epochs = 1000
     learning_rate = 2e-4
     timesteps = 1000
     
@@ -484,7 +483,7 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=50,  # Calculer le FID tous les 10 epochs
+        fid_eval_freq=100,  # Calculer le FID tous les 10 epochs
         num_fid_samples=100  # Utiliser 100 échantillons pour le FID
     )
     
@@ -542,7 +541,7 @@ def main():
         ax2.legend()
     
     plt.tight_layout()
-    plt.savefig('training_metrics.png', dpi=150)
+    plt.savefig('plots/training_metrics.png', dpi=150)
     
     # Afficher les résultats FID
     if len(fid_scores) > 0:
@@ -550,19 +549,16 @@ def main():
         for epoch, score in zip(fid_epochs, fid_scores):
             print(f'Epoch {epoch}: FID = {score:.4f}')
         print(f'\nMeilleur FID: {best_fid:.4f} à l\'epoch {best_epoch}')
-        if os.path.exists("best_FID.pth") :
-            if torch.load("best_FID.pth") > best_fid:
-                torch.save("best_FID.pth",best_fid)
-        else :
-            torch.save("best_FID.pth",best_fid)
-
-        
-    
+ 
     print('\n=== Entraînement terminé ===')
 
 
 if __name__ == '__main__':
-    main()
+    try : 
+        main()
+    except Exception as e:
+        print( f"got error : {e}")    
+    
     duration = time() - start
     with open("time_use.log",'a') as f:
         f.write(f"{datetime.now()}|{duration}\n")

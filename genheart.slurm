@@ -2,7 +2,7 @@
 #SBATCH --account=m25172
 #SBATCH --partition=mesonet
 #SBATCH --job-name=training_genheart # nom du job
-#SBATCH --time=02:00:00              # temps maximal d’allocation
+#SBATCH --time=03:00:00              # temps maximal d’allocation
 #SBATCH --output=genheart.out      # nom du fichier de sortie
 #SBATCH --error=genheart.err       # nom du fichier d'erreur (ici commun avec la sortie)
 
@@ -15,6 +15,6 @@
 apptainer exec \
     --bind $PROJ_HOME:$PROJ_HOME \
     --nv /home/pipeyrie/IAV-proj/containers/pytorch_25.09-py3.sif \
-    python3 /home/pipeyrie/IAV-proj/test-diffusion.py
+    python3 /home/pipeyrie/IAV-proj/mask_diffusion.py
 
 
