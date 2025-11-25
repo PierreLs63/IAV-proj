@@ -457,7 +457,7 @@ def main():
     ).to(device)
 
     try :
-        checkpoint = torch.load('diffusion_model_final.pth') 
+        checkpoint = torch.load('weights/diffusion_model_final.pth') 
         model.load_state_dict(checkpoint['model_state_dict'])
     except :
         pass
@@ -493,7 +493,7 @@ def main():
         'optimizer_state_dict': optimizer.state_dict(),
         'fid_scores': fid_scores,
         'fid_epochs': fid_epochs,
-    }, 'diffusion_model_final.pth')
+    }, 'weights/diffusion_model_final.pth')
     
     # Génération d'échantillons
     print('\n=== Génération d\'échantillons ===\n')
