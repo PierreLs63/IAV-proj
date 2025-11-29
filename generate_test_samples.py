@@ -8,16 +8,20 @@ from monai.data import CacheDataset, DataLoader as MonaiDataLoader
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print("device :",device)
 
     timesteps = 1000
-    batch_size = 4
+    BATCH_SIZE = 100
+    NUM_LAYER = "2"
+    n_att_layers = (False, True, True) if NUM_LAYER == "2" else (False, False, True)
 
+    print(f"generating {BATCH_SIZE} images with model of {NUM_LAYER} attention layers")
 
     data_dicts = prepare_monai_data_dicts('cropped_centered')
         
     # Transformations (sans augmentation)
     train_transforms = get_monai_transforms()
-
+    
     # CacheDataset pour accélérer le chargement
     dataset = CacheDataset(
         data=data_dicts,
@@ -29,7 +33,7 @@ def main():
     # DataLoader MONAI
     dataloader = MonaiDataLoader(
         dataset,
-        batch_size=batch_size,
+        batch_size=BATCH_SIZE,
         shuffle=True,
         num_workers=4,
         pin_memory=True
@@ -38,10 +42,11 @@ def main():
     model = create_monai_diffusion_unet(
             img_channels=1,
             mask_channels=1,
-            spatial_dims=2
+            spatial_dims=2,
+            attention_levels=n_att_layers
         ).to(device)
 
-    checkpoint = torch.load('weights/2mask_diffusion_model_final.pth') 
+    checkpoint = torch.load(f'weights/{NUM_LAYER}mask_diffusion_model_final.pth') 
     model.load_state_dict(checkpoint['model_state_dict'])
 
     diffusion_process = DiffusionProcess(
@@ -51,13 +56,13 @@ def main():
         )
 
     test_batch = next(iter(dataloader))
-    test_masks = test_batch['mask'][:batch_size].to(device)
+    test_masks = test_batch['mask'][:BATCH_SIZE].to(device)
 
+    print("generating ...")
+    images = generate_samples(model,diffusion_process,test_masks,BATCH_SIZE)
 
-    images = generate_samples(model,diffusion_process,test_masks,batch_size)
-
-    for i in range(batch_size):
-        plt.imsave(f'samples/2_attention_layer/im{i}.png',images[i, 0].cpu().numpy(),cmap='gray')
+    for i in range(BATCH_SIZE):
+        plt.imsave(f'samples/{NUM_LAYER}_attention_layer/{NUM_LAYER}_layers_im{i}.png',images[i, 0].cpu().numpy(),cmap='gray')
 
 if __name__ == '__main__':
     try : 

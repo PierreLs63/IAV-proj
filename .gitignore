@@ -13,3 +13,4 @@ remaining_time.py
 *.err
 weights
 misc
+__pycache__

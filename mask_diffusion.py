@@ -147,7 +147,7 @@ class DiffusionProcess:
 
 
 # ========== Model U-Net MONAI ==========
-def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2):
+def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2, attention_levels=(False, True, True)):
     """
     Créer un DiffusionModelUNet de MONAI configuré pour notre tâche
     
@@ -168,7 +168,7 @@ def create_monai_diffusion_unet(img_channels=1, mask_channels=1, spatial_dims=2)
         in_channels=in_channels,
         out_channels=out_channels,
         channels=(128, 256, 512),
-        attention_levels=(False, True, True),
+        attention_levels=attention_levels,
         num_res_blocks=2,
         num_head_channels=(0, 256, 512),
     )
