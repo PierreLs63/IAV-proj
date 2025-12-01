@@ -133,30 +133,21 @@ def main():
     # Créer un DataFrame et sauvegarder les résultats
     df = pd.DataFrame(results)
     
-    # Afficher les statistiques
-    print("\n" + "="*80)
-    print("RÉSULTATS MSE")
-    print("="*80)
-    
-    for layer in attention_layers:
-        layer_data = df[df['attention_layer'] == layer]
-        if not layer_data.empty:
-            print(f"\n{layer}:")
-            print(f"  Nombre d'images comparées: {len(layer_data)}")
-    # Créer un DataFrame et sauvegarder les résultats
-    df = pd.DataFrame(results)
-    
     if df.empty:
         print("Aucune paire d'images trouvée pour calculer la MSE.")
         return None
     
-    # Afficher les statistiques
+    # Afficher les statistiques pour chaque modèle (dossier) séparément
     print("\n" + "="*80)
-    print("RÉSULTATS MSE")
+    print("RÉSULTATS MSE PAR MODÈLE")
     print("="*80)
     
-    for layer in df['attention_layer'].unique():
+    # Sauvegarder les résultats séparément pour chaque modèle
+    all_summaries = []
+    
+    for idx, layer in enumerate(sorted(df['attention_layer'].unique()), start=1):
         layer_data = df[df['attention_layer'] == layer]
+        
         if not layer_data.empty:
             print(f"\n{layer}:")
             print(f"  Nombre d'images comparées: {len(layer_data)}")
@@ -165,14 +156,31 @@ def main():
             print(f"  MSE min: {layer_data['mse'].min():.6f}")
             print(f"  MSE max: {layer_data['mse'].max():.6f}")
             print(f"  Écart-type: {layer_data['mse'].std():.6f}")
+            
+            # Sauvegarder les résultats détaillés pour ce modèle
+            output_file = Path(f"mse_results_{idx}.csv")
+            layer_data.to_csv(output_file, index=False)
+            print(f"  ✓ Résultats sauvegardés dans: {output_file}")
+            
+            # Ajouter au résumé global
+            all_summaries.append({
+                'model': layer,
+                'count': len(layer_data),
+                'mean': layer_data['mse'].mean(),
+                'median': layer_data['mse'].median(),
+                'std': layer_data['mse'].std(),
+                'min': layer_data['mse'].min(),
+                'max': layer_data['mse'].max()
+            })
     
-    # Sauvegarder les résultats détaillés dans un CSV
-    output_file = Path("mse_results.csv")
-    df.to_csv(output_file, index=False)
-    print(f"\n✓ Résultats détaillés sauvegardés dans: {output_file}")
-    
-    # Sauvegarder un résumé
-    summary = df.groupby('attention_layer')['mse'].agg(['count', 'mean', 'median', 'std', 'min', 'max'])
+    # Sauvegarder le résumé global
+    summary_df = pd.DataFrame(all_summaries)
     summary_file = Path("mse_summary.csv")
-    summary.to_csv(summary_file)
-    print(f"✓ Résumé sauvegardé dans: {summary_file}")
+    summary_df.to_csv(summary_file, index=False)
+    print(f"\n✓ Résumé global sauvegardé dans: {summary_file}")
+    
+    return df
+
+
+if __name__ == "__main__":
+    df_results = main()
