@@ -1,0 +1,11 @@
+attention_layer,generated_image,image_number,original_case,original_image,mse
+2_attention_layer,2_layers_im0.png,0,Case_N006,slice_000.npy,94.49524688720703
+2_attention_layer,2_layers_im1.png,1,Case_N006,slice_001.npy,84.74600219726562
+2_attention_layer,2_layers_im2.png,2,Case_N006,slice_002.npy,80.08552551269531
+2_attention_layer,2_layers_im3.png,3,Case_N006,slice_003.npy,78.29327392578125
+2_attention_layer,2_layers_im4.png,4,Case_N006,slice_004.npy,75.9950180053711
+2_attention_layer,2_layers_im5.png,5,Case_N006,slice_005.npy,71.063232421875
+2_attention_layer,2_layers_im6.png,6,Case_N006,slice_006.npy,71.78555297851562
+2_attention_layer,2_layers_im7.png,7,Case_N006,slice_007.npy,73.8050537109375
+2_attention_layer,2_layers_im8.png,8,Case_N006,slice_008.npy,79.49517059326172
+2_attention_layer,2_layers_im9.png,9,Case_P001,slice_009.npy,123.92289733886719

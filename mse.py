@@ -1,3 +1,6 @@
+from time import time
+from datetime import datetime
+start = time()
 import os
 import numpy as np
 import torch
@@ -183,4 +186,14 @@ def main():
 
 
 if __name__ == "__main__":
-    df_results = main()
+    try : 
+        df_results = main()
+    except Exception as e:
+        print( f"got error : {e}")    
+    
+    duration = time() - start
+    with open("time_use.log",'a') as f:
+        f.write(f"{datetime.now()}|{duration}\n")
+        print("durée enregistrée")
+
+    
