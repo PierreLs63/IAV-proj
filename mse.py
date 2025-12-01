@@ -13,19 +13,21 @@ from tqdm import tqdm
 def load_npy_image(npy_path):
     """Charge une image .npy et la convertit en tenseur PyTorch."""
     img = np.load(npy_path)
-    # Normaliser entre 0 et 1 si nécessaire
-    if img.max() > 1.0:
-        img = img / 255.0
+    img = img.astype(np.float32)
+    # Normaliser entre 0 et 1 en utilisant min-max normalization
+    img_min = img.min()
+    img_max = img.max()
+    if img_max > img_min:
+        img = (img - img_min) / (img_max - img_min)
     return torch.from_numpy(img).float()
 
 
 def load_png_image(png_path):
     """Charge une image PNG et la convertit en tenseur PyTorch."""
     img = Image.open(png_path).convert('L')  # Convertir en niveaux de gris
-    img = np.array(img)
+    img = np.array(img, dtype=np.float32)
     # Normaliser entre 0 et 1
-    if img.max() > 1.0:
-        img = img / 255.0
+    img = img / 255.0
     return torch.from_numpy(img).float()
 
 
@@ -71,6 +73,25 @@ def main():
     
     print(f"Dossiers de samples trouvés: {[f.name for f in sample_folders]}")
     
+    # Indexer toutes les images originales par cas
+    print("\nIndexation des images originales par cas...")
+    cases_images = {}
+    total_original = 0
+    for case_folder in sorted(cropped_path.iterdir()):
+        if not case_folder.is_dir():
+            continue
+        
+        slice_image_dir = case_folder / "Slice" / "Image"
+        if not slice_image_dir.exists():
+            continue
+        
+        npy_files = sorted(list(slice_image_dir.glob("slice_*.npy")))
+        if npy_files:
+            cases_images[case_folder.name] = npy_files
+            total_original += len(npy_files)
+    
+    print(f"Total de {len(cases_images)} cas avec {total_original} images originales")
+    
     results = []
     
     # Parcourir chaque dossier de samples trouvé
@@ -80,58 +101,34 @@ def main():
         # Récupérer toutes les images PNG générées
         png_files = sorted(list(layer_folder.glob("*.png")))
         
-        for png_file in tqdm(png_files, desc=f"Calcul MSE pour {layer_folder.name}"):
-            # Extraire le numéro d'image (ex: 1_layers_im0.png -> 0)
-            # Flexible pour différents formats de nommage
-            stem = png_file.stem
-            try:
-                img_num = int(stem.split('_im')[-1])
-            except (ValueError, IndexError):
-                # Essayer d'autres formats
-                try:
-                    img_num = int(''.join(filter(str.isdigit, stem)))
-                except ValueError:
-                    print(f"Impossible d'extraire le numéro d'image de {png_file.name}")
-                    continue
-            
-            # Charger l'image générée
-            generated_img = load_png_image(png_file)
-            
-            # Trouver l'image originale correspondante
-            # Parcourir tous les cas dans cropped_centered
-            found = False
-            for case_folder in sorted(cropped_path.iterdir()):
-                if not case_folder.is_dir():
-                    continue
+        print(f"Comparaison de {len(png_files)} images générées avec {total_original} images originales...")
+        total_comparisons = len(png_files) * total_original
+        print(f"Total de comparaisons à effectuer: {total_comparisons}")
+        
+        # Barre de progression pour toutes les comparaisons
+        with tqdm(total=total_comparisons, desc=f"MSE {layer_folder.name}") as pbar:
+            for png_file in png_files:
+                # Charger l'image générée une seule fois
+                generated_img = load_png_image(png_file)
                 
-                slice_image_dir = case_folder / "Slice" / "Image"
-                if not slice_image_dir.exists():
-                    continue
-                
-                # Compter les images disponibles dans ce cas
-                npy_files = sorted(list(slice_image_dir.glob("slice_*.npy")))
-                
-                if img_num < len(npy_files):
-                    # Charger l'image originale
-                    original_img = load_npy_image(npy_files[img_num])
-                    
-                    # Calculer la MSE
-                    mse_value = calculate_mse(original_img, generated_img)
-                    
-                    results.append({
-                        'attention_layer': layer_folder.name,
-                        'generated_image': png_file.name,
-                        'image_number': img_num,
-                        'original_case': case_folder.name,
-                        'original_image': npy_files[img_num].name,
-                        'mse': mse_value
-                    })
-                    
-                    found = True
-                    break
-            
-            if not found:
-                print(f"Attention: Image originale non trouvée pour {png_file.name}")
+                # Comparer avec chaque image originale de chaque cas
+                for case_name, npy_files in cases_images.items():
+                    for npy_file in npy_files:
+                        # Charger l'image originale
+                        original_img = load_npy_image(npy_file)
+                        
+                        # Calculer la MSE
+                        mse_value = calculate_mse(original_img, generated_img)
+                        
+                        results.append({
+                            'model': layer_folder.name,
+                            'generated_image': png_file.name,
+                            'original_case': case_name,
+                            'original_image': npy_file.name,
+                            'mse': mse_value
+                        })
+                        
+                        pbar.update(1)
     
     # Créer un DataFrame et sauvegarder les résultats
     df = pd.DataFrame(results)
@@ -140,7 +137,9 @@ def main():
         print("Aucune paire d'images trouvée pour calculer la MSE.")
         return None
     
-    # Afficher les statistiques pour chaque modèle (dossier) séparément
+    print(f"\n✓ Total de {len(df)} comparaisons effectuées")
+    
+    # Afficher les statistiques pour chaque modèle
     print("\n" + "="*80)
     print("RÉSULTATS MSE PAR MODÈLE")
     print("="*80)
@@ -148,32 +147,32 @@ def main():
     # Sauvegarder les résultats séparément pour chaque modèle
     all_summaries = []
     
-    for idx, layer in enumerate(sorted(df['attention_layer'].unique()), start=1):
-        layer_data = df[df['attention_layer'] == layer]
+    for idx, model in enumerate(sorted(df['model'].unique()), start=1):
+        model_data = df[df['model'] == model]
         
-        if not layer_data.empty:
-            print(f"\n{layer}:")
-            print(f"  Nombre d'images comparées: {len(layer_data)}")
-            print(f"  MSE moyenne: {layer_data['mse'].mean():.6f}")
-            print(f"  MSE médiane: {layer_data['mse'].median():.6f}")
-            print(f"  MSE min: {layer_data['mse'].min():.6f}")
-            print(f"  MSE max: {layer_data['mse'].max():.6f}")
-            print(f"  Écart-type: {layer_data['mse'].std():.6f}")
+        if not model_data.empty:
+            print(f"\n{model}:")
+            print(f"  Nombre de comparaisons: {len(model_data)}")
+            print(f"  MSE moyenne: {model_data['mse'].mean():.6f}")
+            print(f"  MSE médiane: {model_data['mse'].median():.6f}")
+            print(f"  MSE min: {model_data['mse'].min():.6f}")
+            print(f"  MSE max: {model_data['mse'].max():.6f}")
+            print(f"  Écart-type: {model_data['mse'].std():.6f}")
             
             # Sauvegarder les résultats détaillés pour ce modèle
             output_file = Path(f"mse_results_{idx}.csv")
-            layer_data.to_csv(output_file, index=False)
+            model_data.to_csv(output_file, index=False)
             print(f"  ✓ Résultats sauvegardés dans: {output_file}")
             
             # Ajouter au résumé global
             all_summaries.append({
-                'model': layer,
-                'count': len(layer_data),
-                'mean': layer_data['mse'].mean(),
-                'median': layer_data['mse'].median(),
-                'std': layer_data['mse'].std(),
-                'min': layer_data['mse'].min(),
-                'max': layer_data['mse'].max()
+                'model': model,
+                'comparisons': len(model_data),
+                'mean': model_data['mse'].mean(),
+                'median': model_data['mse'].median(),
+                'std': model_data['mse'].std(),
+                'min': model_data['mse'].min(),
+                'max': model_data['mse'].max()
             })
     
     # Sauvegarder le résumé global
