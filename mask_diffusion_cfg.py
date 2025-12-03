@@ -23,10 +23,10 @@ from monai.metrics import compute_frechet_distance
 from monai.inferers import DiffusionInferer
 
 FILENAME = __file__.split("/")[-1].split(".")[0]
-PATH_PLOTS = Path("./plots/" + FILENAME)
-PATH_WEIGHTS = Path("./weights/" + FILENAME)
-os.makedirs(os.path.dirname(PATH_PLOTS), exist_ok=True)
-os.makedirs(os.path.dirname(PATH_WEIGHTS), exist_ok=True)
+PATH_PLOTS = Path("plots/" + FILENAME)
+PATH_WEIGHTS = Path("weights/" + FILENAME)
+os.makedirs(PATH_PLOTS, exist_ok=True)
+os.makedirs(PATH_WEIGHTS, exist_ok=True)
 
 # ========== Dataset MONAI ==========
 def load_and_normalize(data):
@@ -144,11 +144,22 @@ class DiffusionProcess:
         
         sample = noise
         for t in iterator:
-            timesteps = torch.full((shape[0],), t, device=device, dtype=torch.long)
-            model_output = model_with_mask(sample, timesteps)
-            sample, _ = self.scheduler.step(model_output, t, sample)
+            timesteps = torch.full((shape[0],), t, device=device, dtype=torch.float32)
+                # ===== CFG =====
+            def model_forward(mask_value):
+                inp = torch.cat([sample, mask_value], dim=1)
+                return model(inp, timesteps)
+
+            eps_cond = model_forward(mask)
+            eps_uncond = model_forward(torch.zeros_like(mask))
+            guidance_scale = 5.0
+            eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
+
+            sample, _ = self.scheduler.step(eps, t, sample)
         
         return sample
+    
+    
 
 
 # ========== Model U-Net MONAI ==========
@@ -305,11 +316,19 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
             # Forward diffusion: ajouter du bruit aux images avec MONAI
             x_noisy = diffusion_process.add_noise(images, t, noise)
             
+            
+            
+            # ==== CFG TRAINING ====
+            drop_prob = 0.2
+            drop_mask = (torch.rand(batch_size, 1, 1, 1, device=device) < drop_prob).float()
+            masked_masks = masks * (1.0 - drop_mask)
+            
+            
             # Concaténer avec le masque pour conditionner
-            model_input = torch.cat([x_noisy, masks], dim=1)
+            model_input = torch.cat([x_noisy, masked_masks], dim=1)
             
             # Prédire le bruit (MONAI attend timesteps normalisés)
-            predicted_noise = model(model_input, timesteps=t)
+            predicted_noise = model(model_input, timesteps=t.float())
             
             # Loss MSE entre le bruit prédit et le vrai bruit
             loss = F.mse_loss(predicted_noise, noise)
@@ -422,7 +441,7 @@ def main():
     
     # Hyperparamètres
     batch_size = 16
-    num_epochs = 1000
+    num_epochs = 100
     learning_rate = 2e-4
     timesteps = 1000
     
@@ -462,7 +481,7 @@ def main():
     ).to(device)
 
     try :
-        checkpoint = torch.load('weights/diffusion_model_final.pth') 
+        checkpoint = torch.load(PATH_WEIGHTS / 'diffusion_model_final.pth') 
         model.load_state_dict(checkpoint['model_state_dict'])
     except :
         pass
@@ -562,8 +581,8 @@ if __name__ == '__main__':
     try : 
         main()
     except Exception as e:
-        print( f"got error : {e}")    
-    
+        print( f"got error : {e}")
+ 
     duration = time() - start
     with open("time_use.log",'a') as f:
         f.write(f"{datetime.now()}|{duration}\n")
