@@ -52,6 +52,48 @@ def load_and_normalize(data):
     return {'image': image, 'mask': mask}
 
 
+# --- CFG ---
+def build_cfg_condition(mask, drop_prob=0.1):
+    """
+    mask: [B, 1, H, W]
+    return: [B, 1, H, W] with values 0/1/2
+    """
+
+    # classe 2 = infarctus
+    infarct = (mask >= 3).int()
+
+    # classe 1 = pas infarctus
+    no_infarct = (mask < 2).int()
+
+    # Combine → priorité à infarctus
+    classes = no_infarct + infarct * 1  # → 1 ou 2
+
+    # Drop uniquement la CLASSE
+    # drop par batch, pas par pixel
+    drop_mask = (torch.rand(mask.shape[0], device=mask.device) < drop_prob).int()
+
+    # Appliquer le drop : classe 0
+    classes[drop_mask == 1] = 0
+
+    # Remettre en [B,1,H,W] pour concat
+    return classes.unsqueeze(1).float()
+
+# --- CFG ---
+def build_training_condition(mask, drop_prob=0.1):
+    # classe 2 = infarctus
+    infarct = (mask >= 3).int()
+
+    # classe 1 = pas infarctus
+    no_inf = (mask < 2).int()
+
+    classes = no_inf + infarct * 1  # → 1 ou 2
+
+    # Drop uniquement la classe
+    drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).int()
+    classes[drop == 1] = 0
+
+    return classes.float()
+
 def prepare_monai_data_dicts(root_dir):
     """
     Préparer les dictionnaires de données pour MONAI
@@ -146,12 +188,15 @@ class DiffusionProcess:
         for t in iterator:
             timesteps = torch.full((shape[0],), t, device=device, dtype=torch.float32)
                 # ===== CFG =====
+            cond_class = build_cfg_condition(mask, drop_prob=0.1)    
             def model_forward(mask_value):
                 inp = torch.cat([sample, mask_value], dim=1)
                 return model(inp, timesteps)
 
-            eps_cond = model_forward(mask)
-            eps_uncond = model_forward(torch.zeros_like(mask))
+             
+            eps_cond = model_forward(cond_class)
+            eps_uncond = model_forward(torch.zeros_like(cond_class))  # classe 0 = no condition
+
             guidance_scale = 5.0
             eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
 
@@ -319,15 +364,10 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
             
             
             # ==== CFG TRAINING ====
-            drop_prob = 0.2
-            drop_mask = (torch.rand(batch_size, 1, 1, 1, device=device) < drop_prob).float()
-            masked_masks = masks * (1.0 - drop_mask)
-            
-            
-            # Concaténer avec le masque pour conditionner
-            model_input = torch.cat([x_noisy, masked_masks], dim=1)
-            
-            # Prédire le bruit (MONAI attend timesteps normalisés)
+            cond_classes = build_training_condition(masks, drop_prob=0.1)  # [B, 1, H, W] valeurs 0/1/2
+
+            model_input = torch.cat([x_noisy, cond_classes], dim=1)
+
             predicted_noise = model(model_input, timesteps=t.float())
             
             # Loss MSE entre le bruit prédit et le vrai bruit
