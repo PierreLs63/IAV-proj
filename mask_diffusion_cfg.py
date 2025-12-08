@@ -22,7 +22,8 @@ from monai.utils import set_determinism, first
 from monai.metrics import compute_frechet_distance
 from monai.inferers import DiffusionInferer
 
-FILENAME = __file__.split("/")[-1].split(".")[0]
+FILENAME = Path(__file__).stem
+#FILENAME = __file__.split("/")[-1].split(".")[0]
 PATH_PLOTS = Path("plots/" + FILENAME)
 PATH_WEIGHTS = Path("weights/" + FILENAME)
 os.makedirs(PATH_PLOTS, exist_ok=True)
@@ -70,27 +71,25 @@ def build_cfg_condition(mask, drop_prob=0.1):
 
     # Drop uniquement la CLASSE
     # drop par batch, pas par pixel
-    drop_mask = (torch.rand(mask.shape[0], device=mask.device) < drop_prob).int()
-
-    # Appliquer le drop : classe 0
-    classes[drop_mask == 1] = 0
+    drop_mask = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
+    classes = classes.unsqueeze(1).float()
+    classes = classes * (1.0 - drop_mask)
 
     # Remettre en [B,1,H,W] pour concat
     return classes.unsqueeze(1).float()
 
 # --- CFG ---
 def build_training_condition(mask, drop_prob=0.1):
-    # classe 2 = infarctus
     infarct = (mask >= 3).int()
+    no_inf  = (mask < 2).int()
 
-    # classe 1 = pas infarctus
-    no_inf = (mask < 2).int()
+    classes = no_inf + infarct * 1  # [B,1,H,W] valeurs 1 ou 2
 
-    classes = no_inf + infarct * 1  # → 1 ou 2
+    # Drop par batch
+    drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
 
-    # Drop uniquement la classe
-    drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).int()
-    classes[drop == 1] = 0
+    # Applique le drop (broadcast OK)
+    classes = classes * (1.0 - drop)
 
     return classes.float()
 
