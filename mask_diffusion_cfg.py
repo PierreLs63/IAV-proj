@@ -57,26 +57,22 @@ def load_and_normalize(data):
 def build_cfg_condition(mask, drop_prob=0.1):
     """
     mask: [B, 1, H, W]
-    return: [B, 1, H, W] with values 0/1/2
+    return: [B, 1, H, W] values in {0,1,2}
     """
 
-    # classe 2 = infarctus
     infarct = (mask >= 3).int()
-
-    # classe 1 = pas infarctus
     no_infarct = (mask < 2).int()
 
-    # Combine → priorité à infarctus
-    classes = no_infarct + infarct * 1  # → 1 ou 2
+    # classes ∈ {1,2}
+    classes = no_infarct + infarct * 1   # [B,1,H,W]
 
-    # Drop uniquement la CLASSE
-    # drop par batch, pas par pixel
-    drop_mask = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
-    classes = classes.unsqueeze(1).float()
-    classes = classes * (1.0 - drop_mask)
+    # Drop par batch
+    drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
 
-    # Remettre en [B,1,H,W] pour concat
-    return classes.unsqueeze(1).float()
+    # Broadcast → OK
+    classes = classes * (1.0 - drop)
+
+    return classes.float()
 
 # --- CFG ---
 def build_training_condition(mask, drop_prob=0.1):
