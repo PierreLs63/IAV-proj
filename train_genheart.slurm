@@ -15,6 +15,6 @@
 apptainer exec \
     --bind $PROJ_HOME:$PROJ_HOME \
     --nv /home/pipeyrie/IAV-proj/containers/pytorch_25.09-py3.sif \
-    python3 /home/pipeyrie/IAV-proj/mask_diffusion.py
+    python3 /home/pipeyrie/IAV-proj/mask_diffusion_cfg.py
 
 

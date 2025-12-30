@@ -22,11 +22,12 @@ from monai.utils import set_determinism, first
 from monai.metrics import compute_frechet_distance
 from monai.inferers import DiffusionInferer
 
-FILENAME = __file__.split("/")[-1].split(".")[0]
-PATH_PLOTS = Path("./plots/" + FILENAME)
-PATH_WEIGHTS = Path("./weights/" + FILENAME)
-os.makedirs(os.path.dirname(PATH_PLOTS), exist_ok=True)
-os.makedirs(os.path.dirname(PATH_WEIGHTS), exist_ok=True)
+FILENAME = Path(__file__).stem
+#FILENAME = __file__.split("/")[-1].split(".")[0]
+PATH_PLOTS = Path("plots/" + FILENAME)
+PATH_WEIGHTS = Path("weights/" + FILENAME)
+os.makedirs(PATH_PLOTS, exist_ok=True)
+os.makedirs(PATH_WEIGHTS, exist_ok=True)
 
 # ========== Dataset MONAI ==========
 def load_and_normalize(data):
@@ -51,6 +52,42 @@ def load_and_normalize(data):
     
     return {'image': image, 'mask': mask}
 
+
+# --- CFG ---
+def build_cfg_condition(mask, drop_prob=0.1):
+    """
+    mask: [B, 1, H, W]
+    return: [B, 1, H, W] values in {0,1,2}
+    """
+
+    infarct = (mask >= 3).int()
+    no_infarct = (mask < 2).int()
+
+    # classes ∈ {1,2}
+    classes = no_infarct + infarct * 1   # [B,1,H,W]
+
+    # Drop par batch
+    drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
+
+    # Broadcast → OK
+    classes = classes * (1.0 - drop)
+
+    return classes.float()
+
+# --- CFG ---
+def build_training_condition(mask, drop_prob=0.1):
+    infarct = (mask >= 3).int()
+    no_inf  = (mask < 2).int()
+
+    classes = no_inf + infarct * 1  # [B,1,H,W] valeurs 1 ou 2
+
+    # Drop par batch
+    drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
+
+    # Applique le drop (broadcast OK)
+    classes = classes * (1.0 - drop)
+
+    return classes.float()
 
 def prepare_monai_data_dicts(root_dir):
     """
@@ -144,11 +181,25 @@ class DiffusionProcess:
         
         sample = noise
         for t in iterator:
-            timesteps = torch.full((shape[0],), t, device=device, dtype=torch.long)
-            model_output = model_with_mask(sample, timesteps)
-            sample, _ = self.scheduler.step(model_output, t, sample)
+            timesteps = torch.full((shape[0],), t, device=device, dtype=torch.float32)
+                # ===== CFG =====
+            cond_class = build_cfg_condition(mask, drop_prob=0.1)    
+            def model_forward(mask_value):
+                inp = torch.cat([sample, mask_value], dim=1)
+                return model(inp, timesteps)
+
+             
+            eps_cond = model_forward(cond_class)
+            eps_uncond = model_forward(torch.zeros_like(cond_class))  # classe 0 = no condition
+
+            guidance_scale = 5.0
+            eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
+
+            sample, _ = self.scheduler.step(eps, t, sample)
         
         return sample
+    
+    
 
 
 # ========== Model U-Net MONAI ==========
@@ -305,11 +356,14 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
             # Forward diffusion: ajouter du bruit aux images avec MONAI
             x_noisy = diffusion_process.add_noise(images, t, noise)
             
-            # Concaténer avec le masque pour conditionner
-            model_input = torch.cat([x_noisy, masks], dim=1)
             
-            # Prédire le bruit (MONAI attend timesteps normalisés)
-            predicted_noise = model(model_input, timesteps=t)
+            
+            # ==== CFG TRAINING ====
+            cond_classes = build_training_condition(masks, drop_prob=0.1)  # [B, 1, H, W] valeurs 0/1/2
+
+            model_input = torch.cat([x_noisy, cond_classes], dim=1)
+
+            predicted_noise = model(model_input, timesteps=t.float())
             
             # Loss MSE entre le bruit prédit et le vrai bruit
             loss = F.mse_loss(predicted_noise, noise)
@@ -422,7 +476,7 @@ def main():
     
     # Hyperparamètres
     batch_size = 16
-    num_epochs = 1000
+    num_epochs = 1
     learning_rate = 2e-4
     timesteps = 1000
     
@@ -462,7 +516,7 @@ def main():
     ).to(device)
 
     try :
-        checkpoint = torch.load('weights/diffusion_model_final.pth') 
+        checkpoint = torch.load(PATH_WEIGHTS / 'diffusion_model_final.pth') 
         model.load_state_dict(checkpoint['model_state_dict'])
     except :
         pass
@@ -488,7 +542,7 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=100,  # Calculer le FID tous les 10 epochs
+        fid_eval_freq=1,  # Calculer le FID tous les 10 epochs
         num_fid_samples=100  # Utiliser 100 échantillons pour le FID
     )
     
@@ -559,12 +613,13 @@ def main():
 
 
 if __name__ == '__main__':
-    try : 
+    """ try : 
         main()
     except Exception as e:
-        print( f"got error : {e}")    
-    
-    duration = time() - start
+        print( f"got error : {e}") """
+    main()
+ 
+    """ duration = time() - start
     with open("time_use.log",'a') as f:
         f.write(f"{datetime.now()}|{duration}\n")
-        print("durée enregistrée")
+        print("durée enregistrée") """
