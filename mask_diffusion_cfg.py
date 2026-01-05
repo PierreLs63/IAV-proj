@@ -61,10 +61,10 @@ def build_cfg_condition(mask, drop_prob=0.1):
     """
 
     infarct = (mask >= 3).int()
-    no_infarct = (mask < 2).int()
+    no_infarct = (mask <= 2).int()
 
     # classes ∈ {1,2}
-    classes = no_infarct + infarct * 1   # [B,1,H,W]
+    classes = no_infarct + infarct * 2   # [B,1,H,W]
 
     # Drop par batch
     drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
@@ -77,9 +77,9 @@ def build_cfg_condition(mask, drop_prob=0.1):
 # --- CFG ---
 def build_training_condition(mask, drop_prob=0.1):
     infarct = (mask >= 3).int()
-    no_inf  = (mask < 2).int()
+    no_inf  = (mask <= 2).int()
 
-    classes = no_inf + infarct * 1  # [B,1,H,W] valeurs 1 ou 2
+    classes = no_inf + infarct * 2  # [B,1,H,W] valeurs 1 ou 2
 
     # Drop par batch
     drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
@@ -476,7 +476,7 @@ def main():
     
     # Hyperparamètres
     batch_size = 16
-    num_epochs = 1
+    num_epochs = 6000
     learning_rate = 2e-4
     timesteps = 1000
     
@@ -542,7 +542,7 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=1,  # Calculer le FID tous les 10 epochs
+        fid_eval_freq=2000,  # Calculer le FID tous les 10 epochs
         num_fid_samples=100  # Utiliser 100 échantillons pour le FID
     )
     
@@ -613,13 +613,12 @@ def main():
 
 
 if __name__ == '__main__':
-    """ try : 
+    try : 
         main()
     except Exception as e:
-        print( f"got error : {e}") """
-    main()
+        print( f"got error : {e}")
  
-    """ duration = time() - start
+    duration = time() - start
     with open("time_use.log",'a') as f:
         f.write(f"{datetime.now()}|{duration}\n")
-        print("durée enregistrée") """
+        print("durée enregistrée")

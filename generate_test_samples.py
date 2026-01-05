@@ -12,7 +12,7 @@ def main():
 
     timesteps = 1000
     BATCH_SIZE = 100
-    NUM_LAYER = "2"
+    NUM_LAYER = "1"
     n_att_layers = (False, True, True) if NUM_LAYER == "2" else (False, False, True)
 
     print(f"generating {BATCH_SIZE} images with model of {NUM_LAYER} attention layers")
@@ -46,7 +46,7 @@ def main():
             attention_levels=n_att_layers
         ).to(device)
 
-    checkpoint = torch.load(f'weights/{NUM_LAYER}mask_diffusion_model_final.pth') 
+    checkpoint = torch.load(f'weights/mask_diffusion/diffusion_model_final.pth') 
     model.load_state_dict(checkpoint['model_state_dict'])
 
     diffusion_process = DiffusionProcess(
@@ -62,7 +62,7 @@ def main():
     images = generate_samples(model,diffusion_process,test_masks,BATCH_SIZE)
 
     for i in range(BATCH_SIZE):
-        plt.imsave(f'samples/{NUM_LAYER}_attention_layer/{NUM_LAYER}_layers_im{i}.png',images[i, 0].cpu().numpy(),cmap='gray')
+        plt.imsave(f'samples/simple/im{i}.png',images[i, 0].cpu().numpy(),cmap='gray')
 
 if __name__ == '__main__':
     try : 

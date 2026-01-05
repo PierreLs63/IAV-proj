@@ -422,7 +422,7 @@ def main():
     
     # Hyperparamètres
     batch_size = 16
-    num_epochs = 1000
+    num_epochs = 6000
     learning_rate = 2e-4
     timesteps = 1000
     
@@ -462,7 +462,7 @@ def main():
     ).to(device)
 
     try :
-        checkpoint = torch.load('weights/diffusion_model_final.pth') 
+        checkpoint = torch.load( PATH_WEIGHTS / 'diffusion_model_final.pth') 
         model.load_state_dict(checkpoint['model_state_dict'])
     except :
         pass
@@ -488,7 +488,7 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=100,  # Calculer le FID tous les 10 epochs
+        fid_eval_freq=1000,  # Calculer le FID tous les 10 epochs
         num_fid_samples=100  # Utiliser 100 échantillons pour le FID
     )
     

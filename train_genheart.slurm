@@ -2,7 +2,7 @@
 #SBATCH --account=m25172
 #SBATCH --partition=mesonet
 #SBATCH --job-name=training_genheart # nom du job
-#SBATCH --time=03:00:00              # temps maximal d’allocation
+#SBATCH --time=15:00:00              # temps maximal d’allocation
 #SBATCH --output=genheart.out      # nom du fichier de sortie
 #SBATCH --error=genheart.err       # nom du fichier d'erreur (ici commun avec la sortie)
 
