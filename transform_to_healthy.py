@@ -14,7 +14,7 @@ def main():
     print("device :",device)
 
     timesteps = 1000
-    timestep_for_transform = 200
+    timestep_for_transform = 50
     BATCH_SIZE = 16
     n_att_layers = (False, False, True)
 
@@ -49,7 +49,7 @@ def main():
             attention_levels=n_att_layers
         ).to(device)
 
-    checkpoint = torch.load(f'weights/mask_diffusion_cfg/500diffusion_model_final.pth',  map_location=torch.device('cpu')) 
+    checkpoint = torch.load(f'weights/mask_diffusion_cfg/diffusion_model_final.pth',  map_location=device) 
     model.load_state_dict(checkpoint['model_state_dict'])
 
     diffusion_process = DiffusionProcess(
@@ -67,7 +67,7 @@ def main():
         shape = (BATCH_SIZE, 1, test_masks.shape[2], test_masks.shape[3])
         
         noisy_images = diffusion_process.add_noise(test_images,t)
-        healthy_masks = torch.full_like(test_masks, 1,dtype = torch.int) + 1
+        healthy_masks = torch.full_like(test_masks, 1,dtype = torch.int)
         
         iterator = torch.arange(timestep_for_transform - 1,-1,-1)
         for t in tqdm(iterator,desc= "denoising"):
@@ -102,12 +102,12 @@ def main():
         axes[2].axis('off')
 
         orig_normalized = (test_images[i, 0] - test_images[i, 0].min()) / (test_images[i, 0].max() - test_images[i, 0].min()) * 255
-        diff = np.abs(noisy_images.numpy().astype(float) - orig_normalized.numpy().astype(float))
+        diff = np.abs(noisy_images.cpu().numpy().astype(float) - orig_normalized.cpu().numpy().astype(float))
         axes[3].imshow(diff[i, 0], cmap='hot')
         axes[3].set_title(f"Difference")
         axes[3].axis('off')
 
-        plt.savefig(f'samples/healthy/im{i}.png', dpi=150)
+        plt.savefig(f'./healthy/im{i}.png', dpi=150)
 
 if __name__ == '__main__':
     main()

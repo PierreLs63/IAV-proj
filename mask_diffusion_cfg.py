@@ -45,11 +45,7 @@ def load_and_normalize(data):
     image_min, image_max = image.min(), image.max()
     if image_max > image_min:
         image = 2.0 * (image - image_min) / (image_max - image_min) - 1.0
-    
-    mask_min, mask_max = mask.min(), mask.max()
-    if mask_max > mask_min:
-        mask = 2.0 * (mask - mask_min) / (mask_max - mask_min) - 1.0
-    
+        
     return {'image': image, 'mask': mask}
 
 
@@ -74,20 +70,6 @@ def build_cfg_condition(mask, drop_prob=0.1):
 
     return classes.float()
 
-# --- CFG ---
-def build_training_condition(mask, drop_prob=0.1):
-    infarct = (mask >= 3).int()
-    no_inf  = (mask <= 2).int()
-
-    classes = no_inf + infarct * 2  # [B,1,H,W] valeurs 1 ou 2
-
-    # Drop par batch
-    drop = (torch.rand(mask.shape[0], 1, 1, 1, device=mask.device) < drop_prob).float()
-
-    # Applique le drop (broadcast OK)
-    classes = classes * (1.0 - drop)
-
-    return classes.float()
 
 def prepare_monai_data_dicts(root_dir):
     """
@@ -359,7 +341,7 @@ def train_diffusion(model, dataloader, diffusion_process, optimizer, device, num
             
             
             # ==== CFG TRAINING ====
-            cond_classes = build_training_condition(masks, drop_prob=0.1)  # [B, 1, H, W] valeurs 0/1/2
+            cond_classes = build_cfg_condition(masks, drop_prob=0.1)  # [B, 1, H, W] valeurs 0/1/2
 
             model_input = torch.cat([x_noisy, cond_classes], dim=1)
 

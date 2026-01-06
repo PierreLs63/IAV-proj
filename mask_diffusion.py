@@ -44,12 +44,7 @@ def load_and_normalize(data):
     image_min, image_max = image.min(), image.max()
     if image_max > image_min:
         image = 2.0 * (image - image_min) / (image_max - image_min) - 1.0
-    
-    mask_min, mask_max = mask.min(), mask.max()
-    if mask_max > mask_min:
-        mask = 2.0 * (mask - mask_min) / (mask_max - mask_min) - 1.0
-    
-    return {'image': image, 'mask': mask}
+    return {'image': image, 'mask': mask}    
 
 
 def prepare_monai_data_dicts(root_dir):
@@ -488,7 +483,7 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=num_epochs,
-        fid_eval_freq=1000,  # Calculer le FID tous les 10 epochs
+        fid_eval_freq=2000,  # Calculer le FID tous les 10 epochs
         num_fid_samples=100  # Utiliser 100 échantillons pour le FID
     )
     
