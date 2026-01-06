@@ -1,7 +1,7 @@
 emidec-dataset-1.0.1
 cropped_centered
 containers
-/plots
+
 data
 diffusion_results.png
 training_metrics.png
@@ -11,6 +11,6 @@ remaining_time.py
 *.pth
 *.out
 *.err
-weights
+
 misc
 __pycache__
